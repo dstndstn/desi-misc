@@ -252,13 +252,12 @@ def run_tiles(X):
     return tiles_ann
 
 
-def main(tag, mp):
-    
-    tiles = fits_table('/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag)
-    I = np.flatnonzero(tiles.in_imaging)
-    #plt.plot(tiles.ra[I], tiles.dec[I], 'k.', alpha=0.1);
-    tiles.cut(I)
-    #tiles.cut(tiles.dec > 70)
+def main(fn, mp):
+    basefn = os.path.basename(fn)
+    tiles = fits_table(fn)
+
+    #I = np.flatnonzero(tiles.in_imaging)
+    #tiles.cut(I)
 
     ### Split the tiles into nearby chunks of work for multi-processing.
     from astrometry.util.util import radecdegtohealpix
@@ -282,16 +281,113 @@ def main(tag, mp):
     print(len(tiles), 'tiles')
     print(len(tiles_ann), 'annotated')
     tiles_ann.about()
-    tiles_ann.cut(tiles_ann.index)
+    # unpermute
+    I = np.zeros(len(tiles_ann), np.int32)
+    I[tiles_ann.index] = np.arange(len(tiles_ann))
+    tiles_ann.cut(I)
+
     tiles.add_columns_from(tiles_ann)
     tiles.delete_column('index')
-    tiles.writeto('tiles-%s-decorated-brightest.fits' % tag)
 
+    outfn = basefn.replace('.fits', '-brightest.fits')
+    tiles.writeto(outfn)
+
+
+    # Nudge (only inside imaging footprint)
+
+    from functools import reduce
+    brightest = reduce(np.minimum, [
+        tiles.brightest_guide_0_expanded[:,0],
+        tiles.brightest_guide_2_expanded[:,0],
+        tiles.brightest_guide_3_expanded[:,0],
+        tiles.brightest_guide_5_expanded[:,0],
+        tiles.brightest_guide_7_expanded[:,0],
+        tiles.brightest_guide_8_expanded[:,0],
+        tiles.brightest_focus_1_expanded[:,0],
+        tiles.brightest_focus_4_expanded[:,0],
+        tiles.brightest_focus_6_expanded[:,0],
+        tiles.brightest_focus_9_expanded[:,0],
+    ])
+
+    if 'in_imaging' in tiles.get_columns():
+        I = np.flatnonzero((brightest < 6.) * tiles.in_imaging)
+    else:
+        I = np.flatnonzero((brightest < 6.))
+    print(len(I), 'tiles with G<6')
+
+    tiles.nudge_ra  = np.zeros(len(tiles), np.float32)
+    tiles.nudge_dec = np.zeros(len(tiles), np.float32)
+    tiles.nudge_brightest = np.zeros(len(tiles), np.float32)
+    tiles.index = np.arange(len(tiles))
+
+    for nudge in range(1, 20):
+
+        print('Nudging', len(I), 'by', nudge)
+
+        ddec = 10./3600.
+        dra = ddec / np.cos(np.deg2rad(tiles.dec[I]))
+
+        # copy tiles
+        nudgetiles = tiles[np.repeat(I, 4)]
+        nudgetiles.nudge_ra [0::4] = +nudge * dra
+        nudgetiles.nudge_ra [1::4] = -nudge * dra
+        nudgetiles.nudge_dec[2::4] = +nudge * ddec
+        nudgetiles.nudge_dec[3::4] = -nudge * ddec
+
+        nudgetiles.ra  += nudgetiles.nudge_ra
+        nudgetiles.dec += nudgetiles.nudge_dec
+
+        #ann = run_tiles((nudgetiles, 'nudge%i' % nudge))
+        # split into subsets
+        args = []
+        isplit = np.linspace(0, len(nudgetiles), 33, dtype=int)
+        for i0,i1 in zip(isplit, isplit[1:]):
+            if i0 == i1:
+                continue
+            args.append((nudgetiles[i0:i1], 'nudge%i+%i'%(nudge,i0)))
+        A = mp.map(run_tiles, args)
+        ann = merge_tables(A)
+
+        ann.brightest = reduce(np.minimum, [
+            ann.brightest_guide_0_expanded[:,0],
+            ann.brightest_guide_2_expanded[:,0],
+            ann.brightest_guide_3_expanded[:,0],
+            ann.brightest_guide_5_expanded[:,0],
+            ann.brightest_guide_7_expanded[:,0],
+            ann.brightest_guide_8_expanded[:,0],
+            ann.brightest_focus_1_expanded[:,0],
+            ann.brightest_focus_4_expanded[:,0],
+            ann.brightest_focus_6_expanded[:,0],
+            ann.brightest_focus_9_expanded[:,0],
+        ])
+        ok = (ann.brightest > 6)
+
+        found = np.zeros(len(I), bool)
+        for idir,dirok in enumerate([ok[0::4], ok[1::4], ok[2::4], ok[3::4]]):
+            J = np.flatnonzero(np.logical_not(found) * dirok)
+            print('Nudge dir', idir, ':', len(J), 'are okay')
+            found[J] = True
+            tiles.nudge_ra [I[J]] = nudgetiles.nudge_ra [J*4 + idir]
+            tiles.nudge_dec[I[J]] = nudgetiles.nudge_dec[J*4 + idir]
+            tiles.nudge_brightest[I[J]] = ann.brightest [J*4 + idir]
+
+        I = I[np.flatnonzero(found == False)]
+        if len(I) == 0:
+            break
+
+    outfn = basefn.replace('.fits', '-brightest-nudged.fits')
+    tiles.writeto(outfn)
+    
     
 if __name__ == '__main__':
+    from astrometry.util.multiproc import multiproc
+    
     #tag = '4112-packing-20210328'
     tag = '4112-packing-20210329'
-    from astrometry.util.multiproc import multiproc
-    mp = multiproc(32)
-    main(tag, mp)
+    #fn = '/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag
+
+    fn = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-sv3-rosette.fits'
     
+    mp = multiproc(32)
+    main(fn, mp)
+
