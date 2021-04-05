@@ -36,7 +36,8 @@ class CachingGaiaCatalog(GaiaCatalog):
             return cats[0].copy()
         return merge_tables(cats)
 
-    @functools.lru_cache(maxsize=4000)
+    #@functools.lru_cache(maxsize=4000)
+    @functools.lru_cache(maxsize=100)
     def get_healpix_tree(self, healpix):
         from astrometry.util.fits import fits_table
         fname = self.fnpattern % dict(hp=healpix)
@@ -84,15 +85,11 @@ class CachingGaiaCatalog(GaiaCatalog):
         return cat
 
 
-def main(tag):
-    
-    tiles = fits_table('/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag)
-
-    I = np.flatnonzero(tiles.in_imaging)
-    plt.plot(tiles.ra[I], tiles.dec[I], 'k.', alpha=0.1);
+def run_tiles(X):
+    tiles, tag = X
+    print('Running', tag, '-', len(tiles), 'tiles')
 
     T = fits_table('/global/cfs/cdirs/desi/users/ameisner/GFA/gfa_reduce_etc/gfa_wcs+focus.bigtan-zenith.fits')
-
     # Aaron's file above has all images share the boresight CRVAL and large CRPIX values.
     rel_xy = {}
     for t in T:
@@ -107,7 +104,7 @@ def main(tag):
     for k,(tx,ty,wcs) in rel_xy.items():
         (gstr,gnum) = k
         h,w = wcs.shape
-        print('WCS shape', w, h)
+        #print('WCS shape', w, h)
         x,y = [1,1,w,w,1],[1,h,h,1,1]
         r,d = wcs.pixelxy2radec(x, y)
         dists = degrees_between(0., 0., r, d)
@@ -120,6 +117,7 @@ def main(tag):
 
     Nbright = 10
     tiles_ann = fits_table()
+    tiles_ann.index = tiles.index
 
     #wcs_subs = []
 
@@ -175,8 +173,8 @@ def main(tag):
         expwcs = wcs.get_subimage(-margin, -margin, w+2*margin, h+2*margin)
 
         newrois = []
-        for tag,x0,y0,x1,y1 in newrois:
-            name = '%s_%i_%s' % (cstr, cnum, tag)
+        for tag,x0,y0,x1,y1 in rois:
+            name = '%s_%i_%s' % (cstr.lower(), cnum, tag)
             arr = np.zeros(len(tiles), (np.float32, Nbright))
             tiles_ann.set('brightest_'+name, arr)
             # (the rois have zero-indexed x0,y0, and non-inclusive x1,y1!)
@@ -184,7 +182,6 @@ def main(tag):
         
         gfa_regions.append((cstr, cnum, wcs, expwcs, newrois))
 
-        
     #Nbright = 10
     #tiles_ann = fits_table()
     # wcs_regions = []
@@ -206,10 +203,10 @@ def main(tag):
 
     maxrad = maxr * 1.05
     for itile,tile in enumerate(tiles):
-        if not tile.in_imaging:
-            continue
-        if tile.centerid % 10 == 0:
-            print('tile program', tile.program, 'pass', tile.get('pass'), 'id', tile.centerid, gaia.get_healpix_tree.cache_info())
+        #if not tile.in_imaging:
+        #    continue
+        #if tile.centerid % 10 == 0:
+            #print('tile program', tile.program, 'pass', tile.get('pass'), 'id', tile.centerid, gaia.get_healpix_tree.cache_info())
     
         I = tree_search_radec(tycho_kd, tile.ra, tile.dec, maxrad)
         tycstars = tycho_cat[I]
@@ -226,19 +223,16 @@ def main(tag):
             ok,x,y = bigwcs.radec2pixelxy(tycstars.ra, tycstars.dec)
             tstars = tycstars[(x >= 1) * (y >= 1) * (x <= bw) * (y <= bh)]
 
-            print('Tile', tile.program, 'p', tile.get('pass'), tile.centerid,
-                  'GFA', cstr, cname, ':', len(gstars), 'Gaia stars', len(tstars), 'Tycho-2 stars')
+            #print('Tile', tile.program, 'p', tile.get('pass'), tile.centerid,
+            #      'GFA', cstr, cname, ':', len(gstars), 'Gaia stars', len(tstars), 'Tycho-2 stars')
             
             if len(gstars) + len(tstars) == 0:
                 print('No stars in tile centerid', tile.centerid, 'chip', name)
                 continue
 
             if len(gstars)>0 and len(tstars)>0:
-                print('merge_gaia_tycho')
                 merge_gaia_tycho(gstars, tstars)
-                print('merge_tables')
                 stars = merge_tables([gstars, tstars], columns='fillzero')
-                print('merged:', len(stars))
             elif len(tstars)>0:
                 stars = tstars
             else:
@@ -249,17 +243,55 @@ def main(tag):
             for name, arr, x0, y0, x1, y1 in rois:
                 J = np.flatnonzero((x >= x0) * (x <= x1) * (y >= y0) * (y <= y1))
                 mags = stars.mag[J]
-                print('  ', len(mags), 'in name')
-                K = np.argsort(mag)
+                #print('  ', len(mags), 'in name')
+                K = np.argsort(mags)
                 K = K[:Nbright]
-                arr[itile, :len(K)] = mag[K]
+                arr[itile, :len(K)] = mags[K]
 
+    #tiles.add_columns_from(tiles_ann)
+    return tiles_ann
+
+
+def main(tag, mp):
+    
+    tiles = fits_table('/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag)
+    I = np.flatnonzero(tiles.in_imaging)
+    #plt.plot(tiles.ra[I], tiles.dec[I], 'k.', alpha=0.1);
+    tiles.cut(I)
+    #tiles.cut(tiles.dec > 70)
+
+    ### Split the tiles into nearby chunks of work for multi-processing.
+    from astrometry.util.util import radecdegtohealpix
+    nside = 4
+    Nhp = 12*nside**2
+    Ihps = [[] for i in range(Nhp)]
+    for i,(r,d) in enumerate(zip(tiles.ra, tiles.dec)):
+        hp = radecdegtohealpix(r, d, nside)
+        assert(hp >= 0)
+        Ihps[hp].append(i)
+
+    args = []
+    tiles.index = np.arange(len(tiles))
+    for hp,I in enumerate(Ihps):
+        if len(I) == 0:
+            continue
+        args.append((tiles[np.array(I)], 'HP %i'%hp))
+    print(len(args), 'big healpixes are populated')
+    R = mp.map(run_tiles, args)
+    tiles_ann = merge_tables(R)
+    print(len(tiles), 'tiles')
+    print(len(tiles_ann), 'annotated')
+    tiles_ann.about()
+    tiles_ann.cut(tiles_ann.index)
     tiles.add_columns_from(tiles_ann)
+    tiles.delete_column('index')
     tiles.writeto('tiles-%s-decorated-brightest.fits' % tag)
 
-
+    
 if __name__ == '__main__':
     #tag = '4112-packing-20210328'
     tag = '4112-packing-20210329'
-    main(tag)
+    from astrometry.util.multiproc import multiproc
+    mp = multiproc(32)
+    main(tag, mp)
     
