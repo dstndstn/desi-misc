@@ -89,47 +89,31 @@ def run_tiles(X):
     tiles, tag = X
     print('Running', tag, '-', len(tiles), 'tiles')
 
+    # Aaron's file has all images share the boresight CRVAL, so they have large CRPIX values.
     T = fits_table('/global/cfs/cdirs/desi/users/ameisner/GFA/gfa_reduce_etc/gfa_wcs+focus.bigtan-zenith.fits')
-    # Aaron's file above has all images share the boresight CRVAL and large CRPIX values.
-    rel_xy = {}
+
+    Nbright = 10
+    tiles_ann = fits_table()
+    tiles_ann.index = tiles.index
+    gfa_regions = []
+    maxr = 0.
+
+    #t.cd[0,0], t.cd[0,1], t.cd[1,0], t.cd[1,1], 
     for t in T:
         wcs = Tan(0., 0., t.crpix[0], t.crpix[1],
-                t.cd[0,0], t.cd[0,1], t.cd[1,0], t.cd[1,1], 
-                float(t.naxis[0]), float(t.naxis[1]))
+                  t.cd[0,0], t.cd[1,0], t.cd[0,1], t.cd[1,1],
+                  float(t.naxis[0]), float(t.naxis[1]))
         ctype = t.extname[:5]
         cnum = int(t.extname[5])
-        rel_xy[(ctype,cnum)] = (0.,0.,wcs)
-
-    maxr = 0.
-    for k,(tx,ty,wcs) in rel_xy.items():
-        (gstr,gnum) = k
         h,w = wcs.shape
-        #print('WCS shape', w, h)
         x,y = [1,1,w,w,1],[1,h,h,1,1]
         r,d = wcs.pixelxy2radec(x, y)
         dists = degrees_between(0., 0., r, d)
         maxr = max(maxr, max(dists))
 
-    keys = list(rel_xy.keys())
-    keys.sort()
-
-    gfa_regions = []
-
-    Nbright = 10
-    tiles_ann = fits_table()
-    tiles_ann.index = tiles.index
-
-    #wcs_subs = []
-
-    for k in keys:
-        (cstr,cnum) = k
-        (tx,ty,wcs) = rel_xy[k]
-        h,w = wcs.shape
-
         # x0, y0, x1, y1
         rois = []
-        
-        if cstr == 'FOCUS':
+        if ctype == 'FOCUS':
             # add the two half-chips.
             # wcs.get_subimage moves the CRPIX, but leave CRVAL unchanged, so tx,ty still work unchanged.
             # Aaron's WCS templates correct for the overscans
@@ -174,24 +158,30 @@ def run_tiles(X):
 
         newrois = []
         for tag,x0,y0,x1,y1 in rois:
-            name = '%s_%i_%s' % (cstr.lower(), cnum, tag)
+            name = '%s_%i_%s' % (ctype.lower(), cnum, tag)
             arr = np.zeros(len(tiles), (np.float32, Nbright))
             tiles_ann.set('brightest_'+name, arr)
             # (the rois have zero-indexed x0,y0, and non-inclusive x1,y1!)
             newrois.append((name, arr, 1+x0, 1+y0, x1,y1))
         
-        gfa_regions.append((cstr, cnum, wcs, expwcs, newrois))
+        gfa_regions.append((ctype, cnum, wcs, expwcs, newrois))
 
-    #Nbright = 10
-    #tiles_ann = fits_table()
-    # wcs_regions = []
-    # for cstr,cnum,tag,wcs in wcs_subs:
-    #     name = '%s_%i_%s' % (cstr, cnum, tag)
-    #     arr = np.zeros(len(tiles), (np.float32, Nbright))
-    #     tiles_ann.set('brightest_'+name, arr)        
-    #     wcs_regions.append((name, wcs, arr))
-    # print('wcs_regions:', len(wcs_regions))
 
+    # DEBUG WCS
+    # s = []
+    # for ctype,cnum,wcs,expwcs,rois in gfa_regions:
+    #     WCS = wcs
+    #     h,w = WCS.shape
+    #     #print('Expwcs:', w, 'x', h)
+    #     x = [1,1,w,w,1]
+    #     y = [1,h,h,1,1]
+    #     r,d = WCS.pixelxy2radec(x, y)
+    #     p = ','.join(['%.4f,%.4f' % (rr,dd) for rr,dd in zip(r,d)])
+    #     s.append(p)
+    # s = ';'.join(s)
+    # print('http://legacysurvey.org/viewer/?ra=0&dec=0&poly='+s)
+    # sys.exit(0)
+        
     
     gaia = CachingGaiaCatalog(columns=['ra','dec','phot_g_mean_mag', 'phot_bp_mean_mag', 'phot_rp_mean_mag', 'astrometric_excess_noise',
                                        'astrometric_params_solved', 'source_id', 'pmra_error', 'pmdec_error', 'parallax_error',
@@ -261,7 +251,7 @@ def main(fn, mp):
 
     ### Split the tiles into nearby chunks of work for multi-processing.
     from astrometry.util.util import radecdegtohealpix
-    nside = 4
+    nside = 8
     Nhp = 12*nside**2
     Ihps = [[] for i in range(Nhp)]
     for i,(r,d) in enumerate(zip(tiles.ra, tiles.dec)):
@@ -321,6 +311,8 @@ def main(fn, mp):
     tiles.index = np.arange(len(tiles))
 
     for nudge in range(1, 20):
+        if len(I) == 0:
+            break
 
         print('Nudging', len(I), 'by', nudge)
 
@@ -372,8 +364,6 @@ def main(fn, mp):
             tiles.nudge_brightest[I[J]] = ann.brightest [J*4 + idir]
 
         I = I[np.flatnonzero(found == False)]
-        if len(I) == 0:
-            break
 
     outfn = basefn.replace('.fits', '-brightest-nudged.fits')
     tiles.writeto(outfn)
@@ -388,6 +378,6 @@ if __name__ == '__main__':
 
     fn = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-sv3-rosette.fits'
     
-    mp = multiproc(32)
+    mp = multiproc(8)
     main(fn, mp)
 
