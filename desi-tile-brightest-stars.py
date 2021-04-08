@@ -374,9 +374,9 @@ if __name__ == '__main__':
     
     #tag = '4112-packing-20210328'
     tag = '4112-packing-20210329'
-    #fn = '/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag
+    fn = '/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag
 
-    fn = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-sv3-rosette.fits'
+    #fn = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-sv3-rosette.fits'
     
     mp = multiproc(8)
     main(fn, mp)
