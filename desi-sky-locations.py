@@ -15,11 +15,12 @@ from astrometry.util.multiproc import multiproc
 sys.path.insert(0, 'legacypipe/py')
 from legacypipe.gaiacat import GaiaCatalog
 from legacypipe.reference import fix_tycho, fix_gaia, merge_gaia_tycho
+from legacypipe.survey import get_git_version
 sys.path.insert(0, 'desiutil/py')
 from desiutil.brick import Bricks
 
 def run_one(X):
-    k, sb, bricks = X
+    k, sb, bricks, version = X
     print(k, sb.brickname)
 
     outfn = 'skybricks/sky-%s.fits.gz' % sb.brickname
@@ -41,13 +42,20 @@ def run_one(X):
     fullw,fullh = w*binning, h*binning
     fullcd = cd/binning
 
+    # There are really three states: no coverage, blob, no blob.
+    # Since blobs outside each brick's unique area do not appear in
+    # the files, we start skyblobs as zero, but also track the
+    # coverage so we can set !coverage to blob at the end.
+
     skyblobs = np.zeros((fullh, fullw), bool)
+    covered = np.zeros((fullh, fullw), bool)
+
     skywcs = Tan(sb.ra, sb.dec, (fullw+1)/2., (fullh+1)/2., -fullcd, 0., 0., fullcd, float(fullw), float(fullh))
 
     for i in I:
         brick = bricks[i]
         #print('Blob', brickname)
-        fn = 'cosmo/data/legacysurvey/dr9/%s/metrics/%s/blobs-%s.fits.gz' % (brick.hemi, brick.brickname[:3], brick.brickname)
+        fn = '/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/metrics/%s/blobs-%s.fits.gz' % (brick.hemi, brick.brickname[:3], brick.brickname)
         blobs,hdr = fitsio.read(fn, header=True)
         wcs = Tan(hdr)
         blobs = (blobs > -1)
@@ -55,9 +63,13 @@ def run_one(X):
             Yo,Xo,Yi,Xi,_ = resample_with_wcs(skywcs, wcs)
         except NoOverlapError:
             continue
-        # We could have accumulated the count directly here rather than building the binary mask first
-        # except that edge blobs appear in neighboring bricks!
+
         skyblobs[Yo,Xo] |= blobs[Yi,Xi]
+        covered[Yo,Xo] = True
+
+    # No coverage = equivalent to there being a blob there (ie,
+    # conservative for placing sky fibers)
+    skyblobs[covered == False] = True
 
     # bin down, counting how many times 'skyblobs' is set
     subcount = np.zeros((h,w), np.uint8)
@@ -69,6 +81,7 @@ def run_one(X):
         return False
     subwcs = Tan(sb.ra, sb.dec, (w+1)/2., (h+1)/2., -cd, 0., 0., cd, float(w), float(h))
     hdr = fitsio.FITSHDR()
+    hdr.add_record(dict(name='SB_VER', value=version, comment='desi-sky-locations git version'))
     subwcs.add_to_header(hdr)
     fitsio.write(outfn, subcount, header=hdr, clobber=True)
     print('Wrote', outfn)
@@ -82,8 +95,8 @@ def main():
     sbfn = 'skybricks.fits'
     SB = fits_table(sbfn)
     
-    Bnorth = fits_table('cosmo/data/legacysurvey/dr9/north/survey-bricks-dr9-north.fits.gz')
-    Bsouth = fits_table('cosmo/data/legacysurvey/dr9/south/survey-bricks-dr9-south.fits.gz')
+    Bnorth = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/north/survey-bricks-dr9-north.fits.gz')
+    Bsouth = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/south/survey-bricks-dr9-south.fits.gz')
     Bnorth.cut(Bnorth.survey_primary)
     Bsouth.cut(Bsouth.survey_primary)
     Bsouth.cut(Bsouth.dec > -30)
@@ -111,13 +124,16 @@ def main():
     
     Inear = match_radec(SB.ra, SB.dec, B.ra, B.dec, 0.75, indexlist=True)
 
+    version = get_git_version()
+    print('Version string:', version)
+    
     args = []
     k = 0
     Isb = []
     for isb,(sb,inear) in enumerate(zip(SB, Inear)):
         if inear is None:
             continue
-        args.append((k, sb, B[np.array(inear)]))
+        args.append((k, sb, B[np.array(inear)], version))
         k += 1
         Isb.append(isb)
     print(len(args), 'sky bricks')
