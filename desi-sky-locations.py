@@ -65,7 +65,15 @@ def run_one(X):
             continue
 
         skyblobs[Yo,Xo] |= blobs[Yi,Xi]
-        covered[Yo,Xo] = True
+
+        # coverage: nexp > 0 in any band
+        for bands in ['g','r','z']:
+            fn = ('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/coadd/%s/%s/legacysurvey-%s-nexp-%s.fits.fz' %
+                  (brick.hemi, brick.brickname[:3], brick.brickname, brick.brickname, band))
+            if not os.path.exists(fn):
+                continue
+            nexp = fitsio.read(fn)
+            covered[Yo,Xo] |= (nexp[Yi,Xi] > 0)
 
     # No coverage = equivalent to there being a blob there (ie,
     # conservative for placing sky fibers)
