@@ -67,7 +67,7 @@ def run_one(X):
         skyblobs[Yo,Xo] |= blobs[Yi,Xi]
 
         # coverage: nexp > 0 in any band
-        for bands in ['g','r','z']:
+        for band in ['g','r','z']:
             fn = ('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/%s/coadd/%s/%s/legacysurvey-%s-nexp-%s.fits.fz' %
                   (brick.hemi, brick.brickname[:3], brick.brickname, brick.brickname, band))
             if not os.path.exists(fn):
