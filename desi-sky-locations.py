@@ -124,7 +124,7 @@ def main():
     
     Inear = match_radec(SB.ra, SB.dec, B.ra, B.dec, 0.75, indexlist=True)
 
-    version = get_git_version()
+    version = get_git_version(os.getcwd())
     print('Version string:', version)
     
     args = []
