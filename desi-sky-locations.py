@@ -22,10 +22,8 @@ from desiutil.brick import Bricks
 def run_one(X):
     k, sb, bricks, version = X
     print(k, sb.brickname)
-
-    outfn = 'skybricks/sky-%s.fits.gz' % sb.brickname
+    outfn = 'skybricks/sky-%s.fits.fz' % sb.brickname
     if os.path.exists(outfn):
-        print('Exists')
         return True
 
     I = np.flatnonzero((bricks.ra2 > sb.ra1) * (bricks.ra1 < sb.ra2) * (bricks.dec2 > sb.dec1) * (bricks.dec1 < sb.dec2))
@@ -75,6 +73,9 @@ def run_one(X):
             nexp = fitsio.read(fn)
             covered[Yo,Xo] |= (nexp[Yi,Xi] > 0)
 
+    if not np.any(covered):
+        print('No coverage')
+        return False
     # No coverage = equivalent to there being a blob there (ie,
     # conservative for placing sky fibers)
     skyblobs[covered == False] = True
@@ -84,14 +85,12 @@ def run_one(X):
     for i in range(binning):
         for j in range(binning):
             subcount += skyblobs[i::binning, j::binning]
-    if np.sum(subcount) == 0:
-        print('No blobs touch skybrick')
-        return False
     subwcs = Tan(sb.ra, sb.dec, (w+1)/2., (h+1)/2., -cd, 0., 0., cd, float(w), float(h))
     hdr = fitsio.FITSHDR()
     hdr.add_record(dict(name='SB_VER', value=version, comment='desi-sky-locations git version'))
     subwcs.add_to_header(hdr)
-    fitsio.write(outfn, subcount, header=hdr, clobber=True)
+    fitsio.write(outfn, subcount, header=hdr, clobber=True,
+                 compress='GZIP', tile_dims=(256,256))
     print('Wrote', outfn)
     return True
     
@@ -107,7 +106,7 @@ def main():
     Bsouth = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/south/survey-bricks-dr9-south.fits.gz')
     Bnorth.cut(Bnorth.survey_primary)
     Bsouth.cut(Bsouth.survey_primary)
-    Bsouth.cut(Bsouth.dec > -30)
+    #Bsouth.cut(Bsouth.dec > -30)
     Bnorth.hemi = np.array(['north']*len(Bnorth))
     Bsouth.hemi = np.array(['south']*len(Bsouth))
     B = merge_tables([Bnorth, Bsouth])
@@ -115,8 +114,6 @@ def main():
     # Rough cut the skybricks to those near bricks.
     I,J,d = match_radec(SB.ra, SB.dec, B.ra, B.dec, 1., nearest=True)
     SB.cut(I)
-    # HACK -- just for debugging
-    #SB = SB[np.argsort(np.hypot(SB.ra, SB.dec))]
 
     import argparse
     parser = argparse.ArgumentParser()
@@ -129,12 +126,13 @@ def main():
         SB.cut(SB.ra >= opt.minra)
     if opt.maxra:
         SB.cut(SB.ra <= opt.maxra)
-    
-    Inear = match_radec(SB.ra, SB.dec, B.ra, B.dec, 0.75, indexlist=True)
-
     version = get_git_version(os.getcwd())
     print('Version string:', version)
-    
+
+    # Find bricks near skybricks, as a rough cut.
+    # (magic 1. degree > hypot(skybrick radius, brick radiu) ~= 0.9)
+    Inear = match_radec(SB.ra, SB.dec, B.ra, B.dec, 1., indexlist=True)
+
     args = []
     k = 0
     Isb = []
@@ -158,55 +156,6 @@ def main():
         exist = np.array(exist)
         SB[exist].writeto('skybricks-exist.fits')
     return
-
-    # # 3600 + 1% margin on each side
-    # w,h = 3672,3672
-    # binning = 4
-    # # pixscale
-    # cd = 1./3600.
-    # 
-    # fullw,fullh = w*binning, h*binning
-    # fullcd = cd/binning
-    # 
-    # skyblobs = np.zeros((fullh, fullw), bool)
-    # subcount = np.zeros((h,w), np.uint8)
-    # for isb,sb in enumerate(SB):
-    #     print('Skyblob', sb.brickname)
-    #     skywcs = Tan(sb.ra, sb.dec, (fullw+1)/2., (fullh+1)/2., -fullcd, 0., 0., fullcd, float(fullw), float(fullh))
-    # 
-    #     skyblobs[:,:] = False
-    # 
-    #     # indices of bricks near this skybrick.
-    #     I = np.array(Inear[isb])
-    #     # cut to bricks actually inside the skybrick
-    #     I = I[((B.ra2[I] > sb.ra1) * (B.ra1[I] < sb.ra2) * (B.dec2[I] > sb.dec1) * (B.dec1[I] < sb.dec2))]
-    #     for i in I:
-    #         brickname = B.brickname[i]
-    #         print('Blob', brickname)
-    #         fn = 'cosmo/data/legacysurvey/dr9/%s/metrics/%s/blobs-%s.fits.gz' % (B.hemi[i], brickname[:3], brickname)
-    #         blobs,hdr = fitsio.read(fn, header=True)
-    #         wcs = Tan(hdr)
-    #         blobs = (blobs > -1)
-    #         try:
-    #             Yo,Xo,Yi,Xi,_ = resample_with_wcs(skywcs, wcs)
-    #         except NoOverlapError:
-    #             continue
-    #         # We could have accumulated the count directly here rather than building the binary mask first
-    #         # except that edge blobs appear in neighboring bricks!
-    #         skyblobs[Yo,Xo] |= blobs[Yi,Xi]
-    # 
-    #     # bin down, counting how many times 'skyblobs' is set
-    #     subcount[:,:] = 0
-    #     for i in range(binning):
-    #         for j in range(binning):
-    #             subcount += skyblobs[i::binning, j::binning]
-    #     subwcs = Tan(sb.ra, sb.dec, (w+1)/2., (h+1)/2., -cd, 0., 0., cd, float(w), float(h))
-    #     
-    #     hdr = fitsio.FITSHDR()
-    #     subwcs.add_to_header(hdr)
-    #     #fitsio.write('skybricks/sky-%s.fits.fz' % sb.brickname, blobcount, header=hdr, clobber=True,
-    #     #            compress='GZIP', tiledim=(256,256))
-    #     fitsio.write('skybricks/sky-%s.fits.gz' % sb.brickname, blobcount, header=hdr, clobber=True)
 
 if __name__ == '__main__':
     main()
