@@ -47,7 +47,8 @@ def run_one(X):
     for i in I:
         brick = bricks[i]
         #print('Blob', brickname)
-        fn = 'cosmo/data/legacysurvey/dr9/%s/metrics/%s/blobs-%s.fits.gz' % (brick.hemi, brick.brickname[:3], brick.brickname)
+        #fn = 'cosmo/data/legacysurvey/dr9/%s/metrics/%s/blobs-%s.fits.gz' % (brick.hemi, brick.brickname[:3], brick.brickname)
+        fn = 'dr9-south-blobs/blobs-%s.fits.gz' % (brick.brickname)
         blobs,hdr = fitsio.read(fn, header=True)
         wcs = Tan(hdr)
         blobs = (blobs > -1)
@@ -185,4 +186,13 @@ def main():
     #     fitsio.write('skybricks/sky-%s.fits.gz' % sb.brickname, blobcount, header=hdr, clobber=True)
 
 if __name__ == '__main__':
-    main()
+    #main()
+    B = fits_table('bricks-near.fits')
+    SB = fits_table('skybricks.fits')
+    I = np.flatnonzero(np.isin(SB.brickname, [
+        '2187p340', '2175p340',
+    #'1500p290', '1507p300', '1519p300',
+    #'1505p310', '1490p320'
+    ]))
+    for i in I:
+        run_one((0, SB[i], B))
