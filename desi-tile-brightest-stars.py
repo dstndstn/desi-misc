@@ -373,11 +373,14 @@ if __name__ == '__main__':
     from astrometry.util.multiproc import multiproc
     
     #tag = '4112-packing-20210328'
-    tag = '4112-packing-20210329'
-    fn = '/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag
+    #tag = '4112-packing-20210329'
+    #fn = '/global/cfs/cdirs/desi//users/schlafly/tiling/tiles-%s-decorated.fits' % tag
 
-    #fn = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-sv3-rosette.fits'
+    fn = '/global/cfs/cdirs/desi/users/schlafly/tiling/tiles-4112-packing-20210405-decorated-fixed.fits'
     
-    mp = multiproc(8)
+    #fn = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-sv3-rosette.fits'
+
+    # Don't make this 32 because you'll OOM
+    mp = multiproc(16)
     main(fn, mp)
 
