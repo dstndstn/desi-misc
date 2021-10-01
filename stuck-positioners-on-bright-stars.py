@@ -1,4 +1,3 @@
-%matplotlib inline
 import pylab as plt
 import os
 import numpy as np
@@ -76,6 +75,8 @@ def main():
         if i == inext:
             print(i, np.sum([(v is not None) for k,v in allresults.items()]))
             inext *= 2
+        #if i == 32:
+        #    break
         tile = tiles[i]
         tid = tile['TILEID']
         tile_ra = tile['RA']
@@ -112,9 +113,10 @@ def main():
     T.pos_dec = []
     T.tycho_ra = []
     T.tycho_dec = []
+    T.dist_arcsec = []
     T.tycho_mag = []
 
-    for k,v in allresults:
+    for k,v in allresults.items():
         if v is None:
             continue
         (I,J,D,tras,tdecs,pras,pdecs,locs,mags) = v
@@ -129,6 +131,7 @@ def main():
         T.pos_dec.extend(pdecs)
         T.tycho_ra.extend(tras)
         T.tycho_dec.extend(tdecs)
+        T.dist_arcsec.extend(D)
         T.tycho_mag.extend(mags)
     T.to_np_arrays()
     T.writeto('stuck-on-stars.fits')
