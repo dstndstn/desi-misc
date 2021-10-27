@@ -33,6 +33,12 @@ def run_one(X):
 
     # 3600 + 1% margin on each side
     w,h = 3672,3672
+
+    if sb.dec >= 78.:
+        # In order to have fully-overlapping tiles at high Decs, we
+        # need larger maps.  DR9 reaches a max skytile of Dec=+85,
+        # where the required size is 3724.  Add a little margin.
+        w,h = 3744,3744
     binning = 4
     # pixscale
     cd = 1./3600.
@@ -162,12 +168,25 @@ def main():
 
 if __name__ == '__main__':
     #main()
-    B = fits_table('bricks-near.fits')
-    SB = fits_table('skybricks.fits')
-    I = np.flatnonzero(np.isin(SB.brickname, [
-        '2187p340', '2175p340',
+    #B = fits_table('bricks-near.fits')
+    #SB = fits_table('skybricks.fits')
+    B = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/north/survey-bricks-dr9-north.fits.gz')
+    B.cut(B.dec > 77)
+    B.hemi = np.array(['north']*len(B))
+
+    SB = fits_table('/global/cfs/cdirs/desi/target/skybricks/v3/skybricks-exist.fits')
+    #I = np.flatnonzero(np.isin(SB.brickname, [
+    #    '2187p340', '2175p340',
     #'1500p290', '1507p300', '1519p300',
     #'1505p310', '1490p320'
-    ]))
+    #]))
+    I = np.flatnonzero(SB.dec >= 78.)
+
+    version = get_git_version(os.getcwd())
+    #version = 4
+
+    mp = multiproc(32)
+    args = []
     for i in I:
-        run_one((0, SB[i], B))
+        args.append((0, SB[i], B, version))
+    mp.map(run_one, args)
