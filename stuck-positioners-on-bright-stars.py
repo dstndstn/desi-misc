@@ -8,6 +8,7 @@ from astrometry.util.fits import fits_table
 from astrometry.libkd.spherematch import match_radec
 from astrometry.libkd.spherematch import tree_open, tree_build_radec, trees_match
 from astrometry.util.starutil_numpy import deg2dist, arcsec_between
+from astrometry.util.multiproc import multiproc
 
 from astropy.time import Time
 from astropy.table import Table
@@ -18,9 +19,36 @@ from fiberassign.hardware import FIBER_STATE_STUCK, FIBER_STATE_BROKEN, xy2radec
 from fiberassign.tiles import load_tiles
 from desimodel.focalplane.fieldrot import field_rotation_angle
 
+hw = None
+stuck_x = None
+stuck_y = None
+stuck_loc = None
+starkd = None
+
+def _match_tile(X):
+    tid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X
+
+    loc_ra,loc_dec = xy2radec(
+        hw, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha,
+        stuck_x, stuck_y, False, 0)
+    kd = tree_build_radec(loc_ra, loc_dec)
+    I,J,d = trees_match(starkd, kd, match_radius)
+    print('Tile', tid, 'matched', len(I), 'stars')
+    if len(I):
+        res = tid, I, loc_ra[J], loc_dec[J], stuck_loc[J], np.rad2deg(d)*3600.
+    else:
+        res = None
+    return res
+
 def main():
     os.environ['DESIMODEL'] = '/global/homes/d/dstn/desimodel-data'
-    
+
+    global hw
+    global stuck_x
+    global stuck_y
+    global stuck_loc
+    global starkd
+
     hw = load_hardware()
     
     # From fiberassign/stucksky.py: find X,Y positions of stuck positioners.
@@ -57,11 +85,15 @@ def main():
     
     tiles = Table.read('/global/cfs/cdirs/desi/target/surveyops/ops/tiles-main.ecsv')
     
-    tycho = fits_table('/global/cfs/cdirs/cosmo/staging/tycho2/tycho2.kd.fits')
-    #tychokd = tree_open('/global/cfs/cdirs/cosmo/staging/tycho2/tycho2.kd.fits')
-    tychokd = tree_build_radec(tycho.ra, tycho.dec)
-    match_radius = deg2dist(5./3600.)
-    
+    #tycho = fits_table('/global/cfs/cdirs/cosmo/staging/tycho2/tycho2.kd.fits')
+    ##tychokd = tree_open('/global/cfs/cdirs/cosmo/staging/tycho2/tycho2.kd.fits')
+    #tychokd = tree_build_radec(tycho.ra, tycho.dec)
+
+    stars = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/masking/gaia-mask-dr9.fits.gz')
+    starkd = tree_build_radec(stars.ra, stars.dec)
+
+    match_radius = deg2dist(20./3600.)
+
     stuck_loc = np.array(stuck_loc)
     
     allresults = {}
@@ -69,14 +101,12 @@ def main():
     tnow = datetime.now()
     tile_obstime = tnow.isoformat(timespec='seconds')
     mjd = Time(tnow).mjd
-    
-    inext = 2
+
+    mp = multiproc(32)
+
+    print('Building arg lists...')
+    args = []
     for i in range(len(tiles)):
-        if i == inext:
-            print(i, np.sum([(v is not None) for k,v in allresults.items()]))
-            inext *= 2
-        #if i == 32:
-        #    break
         tile = tiles[i]
         tid = tile['TILEID']
         tile_ra = tile['RA']
@@ -84,25 +114,12 @@ def main():
         tile_obsha = tile['DESIGNHA']
         # "fieldrot"
         tile_theta = field_rotation_angle(tile_ra, tile_dec, mjd)
-    
-        loc_ra,loc_dec = xy2radec(
-            hw, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, stuck_x, stuck_y, False, 0)
-        kd = tree_build_radec(loc_ra, loc_dec)
-        I,J,d = trees_match(tychokd, kd, match_radius)
-        if len(I):
-            mag = tycho.mag_vt[I]
-            maghp = tycho.mag_hp[I]
-            magbt = tycho.mag_bt[I]
-            mag[mag == 0] = maghp[mag == 0]
-            mag[mag == 0] = magbt[mag == 0]
-            allresults[tid] = (I, J, np.rad2deg(d) * 3600., tycho.ra[I], tycho.dec[I], loc_ra[J], loc_dec[J], stuck_loc[J], mag)
-        else:
-            allresults[tid] = None
+        args.append((tid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius))
 
-    loc_to_petal = hw.loc_petal
-    loc_to_device = hw.loc_device
-    loc_to_fiber = hw.loc_fiber
-            
+    print('Matching in parallel...')
+    res = mp.map(_match_tile, args)
+
+    print('Organizing results...')
     T = fits_table()
     T.tileid = []
     T.loc = []
@@ -111,31 +128,34 @@ def main():
     T.fiber = []
     T.pos_ra = []
     T.pos_dec = []
-    T.tycho_ra = []
-    T.tycho_dec = []
+    T.star_ra = []
+    T.star_dec = []
     T.dist_arcsec = []
-    T.tycho_mag = []
+    T.mask_mag = []
 
-    for k,v in allresults.items():
-        if v is None:
+    loc_to_petal = hw.loc_petal
+    loc_to_device = hw.loc_device
+    loc_to_fiber = hw.loc_fiber
+
+    for vals in res:
+        if vals is None:
             continue
-        (I,J,D,tras,tdecs,pras,pdecs,locs,mags) = v
-        tileid = k
+        tileid, I, pos_ra, pos_dec, pos_loc, dists = vals
         T.tileid.extend([tileid] * len(I))
-        T.loc.extend(locs)
-        for loc in locs:
+        T.loc.extend(pos_loc)
+        for loc in pos_loc:
             T.petal.append(loc_to_petal[loc])
             T.device.append(loc_to_device[loc])
             T.fiber.append(loc_to_fiber[loc])
-        T.pos_ra.extend(pras)
-        T.pos_dec.extend(pdecs)
-        T.tycho_ra.extend(tras)
-        T.tycho_dec.extend(tdecs)
-        T.dist_arcsec.extend(D)
-        T.tycho_mag.extend(mags)
+        T.pos_ra.extend(pos_ra)
+        T.pos_dec.extend(pos_dec)
+        T.star_ra.extend(stars.ra[I])
+        T.star_dec.extend(stars.dec[I])
+        T.dist_arcsec.extend(dists)
+        T.mask_mag.extend(stars.mask_mag[I])
     T.to_np_arrays()
     T.writeto('stuck-on-stars.fits')
-            
+
 if __name__ == '__main__':
     main()
     
