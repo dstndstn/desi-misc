@@ -4,10 +4,15 @@ import numpy as np
 from collections import Counter
 from datetime import datetime, timezone
 
+import matplotlib
+matplotlib.use('Agg')
+import pylab as plt
+
 from astrometry.util.fits import fits_table
 from astrometry.libkd.spherematch import match_radec
 from astrometry.libkd.spherematch import tree_open, tree_build_radec, trees_match
-from astrometry.util.starutil_numpy import deg2dist, arcsec_between
+#from astrometry.util.starutil_numpy import deg2dist, arcsec_between
+from astrometry.util.starutil_numpy import deg2dist, radectoxyz
 from astrometry.util.multiproc import multiproc
 
 from astropy.time import Time
@@ -84,15 +89,27 @@ def main():
         stuck_y[iloc] = loc_y
     
     tiles = Table.read('/global/cfs/cdirs/desi/target/surveyops/ops/tiles-main.ecsv')
-    
-    #tycho = fits_table('/global/cfs/cdirs/cosmo/staging/tycho2/tycho2.kd.fits')
-    ##tychokd = tree_open('/global/cfs/cdirs/cosmo/staging/tycho2/tycho2.kd.fits')
-    #tychokd = tree_build_radec(tycho.ra, tycho.dec)
+    print(len(tiles), 'tiles')
+    # Deduplicate tiles with same RA,Dec center
+    tilera = tiles['RA']
+    tiledec = tiles['DEC']
+    tileid = tiles['TILEID']
+    rdtile = {}
+    tilemap = {}
+    for tid,r,d in zip(tileid, tilera, tiledec):
+        key = r,d
+        if key in rdtile:
+            # already seen a tile with this RA,Dec; point to it
+            tilemap[tid] = rdtile[key]
+        else:
+            rdtile[key] = tid
+    del rdtile
 
     stars = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/masking/gaia-mask-dr9.fits.gz')
+    print(len(stars), 'stars for masking')
     starkd = tree_build_radec(stars.ra, stars.dec)
 
-    match_radius = deg2dist(20./3600.)
+    match_radius = deg2dist(30./3600.)
 
     stuck_loc = np.array(stuck_loc)
     
@@ -106,17 +123,15 @@ def main():
 
     print('Building arg lists...')
     args = []
-    for i in range(len(tiles)):
-        tile = tiles[i]
-        tid = tile['TILEID']
-        tile_ra = tile['RA']
-        tile_dec = tile['DEC']
-        tile_obsha = tile['DESIGNHA']
+    for tid,tile_ra,tile_dec,tile_obsha in zip(tileid, tilera, tiledec, tiles['DESIGNHA']):
+        # skip duplicate tiles
+        if tid in tilemap:
+            continue
         # "fieldrot"
         tile_theta = field_rotation_angle(tile_ra, tile_dec, mjd)
         args.append((tid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius))
 
-    print('Matching in parallel...')
+    print('Matching', len(args), 'unique tile RA,Decs in parallel...')
     res = mp.map(_match_tile, args)
 
     print('Organizing results...')
@@ -156,6 +171,143 @@ def main():
     T.to_np_arrays()
     T.writeto('stuck-on-stars.fits')
 
+def radius_for_mag(mag):
+    k0 = 15.383
+    return k0 * 1.108**-mag
+
+def arcsec_between(ra1,dec1, ra2,dec2):
+    xyz1 = radectoxyz(ra1, dec1)
+    xyz2 = radectoxyz(ra2, dec2)
+    d2 = np.sum((xyz1 - xyz2)**2, axis=1)
+    rad = np.arccos(1. - d2 / 2.)
+    return 3600.*np.rad2deg(rad)
+
+
 if __name__ == '__main__':
-    main()
-    
+    #main()
+
+    tiles = Table.read('/global/cfs/cdirs/desi/target/surveyops/ops/tiles-main.ecsv')
+    tilera = tiles['RA']
+    tiledec = tiles['DEC']
+    tileid = tiles['TILEID']
+    rd = list(zip(tilera, tiledec))
+    print(len(tiles), 'tiles')
+    print(len(set(rd)), 'unique RA,Dec centers')
+
+    tilecenter = {}
+    rdtile = {}
+    tilemap = {}
+    for tid,r,d in zip(tileid, tilera, tiledec):
+        tilecenter[tid] = (r,d)
+        key = r,d
+        if key in rdtile:
+            # already seen a tile with this RA,Dec; point to it
+            tilemap[tid] = rdtile[key]
+        else:
+            rdtile[key] = tid
+    del rdtile
+
+    T = fits_table('stuck-on-stars.fits')
+    print(len(T), 'matches')
+    print(len(set(T.tileid)), 'tiles')
+
+    duptile = np.isin(T.tileid, list(tilemap.keys()))
+    #print(np.sum(duptile), 'duplicate tiles')
+    T.cut(np.logical_not(duptile))
+    print(len(T), 'matches on non-dup tiles')
+    print(len(set(T.tileid)), 'tiles')
+
+    rad = radius_for_mag(T.mask_mag)
+    T.mask_radius = rad
+    Ibad = np.flatnonzero(T.dist_arcsec < rad)
+    print(len(Ibad), 'are too bright')
+    badtiles = np.unique(T.tileid[Ibad])
+    print(len(badtiles), 'tiles')
+
+    dra,ddec = np.meshgrid(np.arange(-10, 11), np.arange(-10, 11))
+    dra = dra.ravel()
+    ddec = ddec.ravel()
+    I = np.argsort(np.hypot(dra, ddec))
+    # skip 0,0
+    I = I[1:]
+    dra = dra[I]
+    ddec = ddec[I]
+
+    goodshifts = {}
+
+    for tile in badtiles:
+        print()
+        print('Tile', tile)
+        I = np.flatnonzero(T.tileid == tile)
+        bad = (T.dist_arcsec[I] < T.mask_radius[I])
+        Ibad = I[bad]
+        print(len(Ibad), 'bad for tile', tile)
+        print('Mags:', T.mask_mag[Ibad])
+        print('Mask radii:', T.mask_radius[Ibad])
+        print('Dists:', T.dist_arcsec[Ibad])
+
+        tr,td = tilecenter[tile]
+        cosd = np.cos(np.deg2rad(td))
+        goodshift = None
+        for dr,dd in zip(dra,ddec):
+            # Shift the positioners
+            dnew = T.pos_dec[I] + dd/3600.
+            rnew = T.pos_ra[I]  + dr/3600. / cosd
+            newrad = arcsec_between(rnew, dnew, T.star_ra[I], T.star_dec[I])
+            newbad = newrad < T.mask_radius[I]
+            print('Shift (%+ 2i, %+ 2i)' % (dr,dd), ': bad radii',
+                  ', '.join(['%.1f vs %.1f' % (nr,t)
+                             for nr,t in zip(newrad[bad], T.mask_radius[Ibad])]),
+                  ', total of', np.sum(newbad), 'are too close to stars')
+            if not np.any(newbad):
+                print('Found acceptable shift: dr,dd', dr,dd)
+                goodshift = (dr,dd)
+                break
+
+        if goodshift is None:
+            print('Failed to find a nudge for tile', tile)
+
+            plt.clf()
+            dr = 3600. * (T.star_ra [I] - T.pos_ra [I])*cosd
+            dd = 3600. * (T.star_dec[I] - T.pos_dec[I])
+            rad = T.mask_radius[I]
+            plt.plot(dr, dd, 'k.')
+            from matplotlib.patches import Circle
+            for r,d,rr in zip(dr,dd,rad):
+                plt.gca().add_artist(Circle((r,d), rr, color='b', alpha=0.2))
+            plt.plot(dra, ddec, 'k.', alpha=0.1)
+            plt.axis('square')
+            plt.axis([-20, 20, -20, 20])
+            plt.savefig('tile-%05i.png' % tile)
+
+        goodshifts[tile] = goodshift
+
+    tiles['NEEDS_NUDGE'] = np.zeros(len(tiles), bool)
+    tiles['FOUND_NUDGE'] = np.zeros(len(tiles), bool)
+    tiles['NUDGE_RA']  = np.zeros(len(tiles), np.float32)
+    tiles['NUDGE_DEC'] = np.zeros(len(tiles), np.float32)
+    tiles['NUDGED_RA']  = tiles['RA'].copy()
+    tiles['NUDGED_DEC'] = tiles['DEC'].copy()
+
+    for i,(tid) in enumerate(tileid):
+        # map to canonical tile with this tile's RA,Dec
+        tid = tilemap.get(tid, tid)
+
+        if not tid in goodshifts:
+            # this tile does not need a nudge.
+            continue
+        tiles['NEEDS_NUDGE'][i] = True
+        nudge = goodshifts[tid]
+        if nudge is None:
+            # no nudge we tried worked!
+            continue
+        tiles['FOUND_NUDGE'][i] = True
+        dr,dd = nudge
+        tiles['NUDGE_RA' ][i] = dr
+        tiles['NUDGE_DEC'][i] = dd
+        cosd = np.cos(np.deg2rad(tiles['DEC'][i]))
+        tiles['NUDGED_RA' ][i] += (dr/3600.)/cosd
+        tiles['NUDGED_DEC'][i] += dd/3600.
+
+    tiles.write('tiles-nudged.ecsv', overwrite=True)
+    tiles.write('tiles-nudged.fits', overwrite=True)
