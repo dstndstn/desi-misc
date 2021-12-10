@@ -24,6 +24,8 @@ from fiberassign.hardware import FIBER_STATE_STUCK, FIBER_STATE_BROKEN, xy2radec
 from fiberassign.tiles import load_tiles
 from desimodel.focalplane.fieldrot import field_rotation_angle
 
+from legacypipe.survey import radec_at_mjd
+
 hw = None
 stuck_x = None
 stuck_y = None
@@ -105,8 +107,24 @@ def main():
             rdtile[key] = tid
     del rdtile
 
+    tnow = datetime.now()
+    tile_obstime = tnow.isoformat(timespec='seconds')
+    mjd = Time(tnow).mjd
+
+
+    
     stars = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/masking/gaia-mask-dr9.fits.gz')
     print(len(stars), 'stars for masking')
+
+    print('Moving to MJD', mjd)
+    ra,dec = radec_at_mjd(stars.ra, stars.dec, stars.ref_epoch.astype(float),
+                          stars.pmra, stars.pmdec, stars.parallax, mjd)
+    assert(np.all(np.isfinite(ra)))
+    assert(np.all(np.isfinite(dec)))
+    stars.ra = ra
+    stars.dec = dec
+    print('Building kd-tree...')
+
     starkd = tree_build_radec(stars.ra, stars.dec)
 
     match_radius = deg2dist(30./3600.)
@@ -115,10 +133,6 @@ def main():
     
     allresults = {}
     
-    tnow = datetime.now()
-    tile_obstime = tnow.isoformat(timespec='seconds')
-    mjd = Time(tnow).mjd
-
     mp = multiproc(32)
 
     print('Building arg lists...')
@@ -224,7 +238,8 @@ if __name__ == '__main__':
     badtiles = np.unique(T.tileid[Ibad])
     print(len(badtiles), 'tiles')
 
-    dra,ddec = np.meshgrid(np.arange(-10, 11), np.arange(-10, 11))
+    R = 15
+    dra,ddec = np.meshgrid(np.arange(-R, R+1), np.arange(-R, R+1))
     dra = dra.ravel()
     ddec = ddec.ravel()
     I = np.argsort(np.hypot(dra, ddec))
