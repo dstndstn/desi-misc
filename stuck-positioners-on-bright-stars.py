@@ -231,74 +231,159 @@ if __name__ == '__main__':
     print(len(T), 'matches on non-dup tiles')
     print(len(set(T.tileid)), 'tiles')
 
-    rad = radius_for_mag(T.mask_mag)
-    T.mask_radius = rad
-    Ibad = np.flatnonzero(T.dist_arcsec < rad)
-    print(len(Ibad), 'are too bright')
-    badtiles = np.unique(T.tileid[Ibad])
-    print(len(badtiles), 'tiles')
 
-    R = 15
-    dra,ddec = np.meshgrid(np.arange(-R, R+1), np.arange(-R, R+1))
-    dra = dra.ravel()
-    ddec = ddec.ravel()
-    I = np.argsort(np.hypot(dra, ddec))
-    # skip 0,0
-    I = I[1:]
-    dra = dra[I]
-    ddec = ddec[I]
+    def dr9_based_mask_radius(mag):
+        ''' in arcsec '''
+        rad_dr9 = 1630. * 1.396**(-mag)
+        return rad_dr9 / 8.
+
+    def badness(rad, mag):
+        # INVERSE of dr9_based_mask_radius
+        mag_safe = (np.log(1630. / 8.) - np.log(rad)) / np.log(1.396)
+        # Badness = flux ratio over flux at safe radius.
+        badness = 10.**((mag - mag_safe)/-2.5)
+        return badness
+
+    T.mask_radius = dr9_based_mask_radius(T.mask_mag)
+    T.badness = badness(np.maximum(0.5, T.dist_arcsec), T.mask_mag)
+
+
+    mags = np.array([0., 10., 11., 12., 16.])
+    print('Mags:', mags)
+    r = dr9_based_mask_radius(mags)
+    print('DR9-based mask radii:', r)
+    print('Badness at r/2:', badness(r/2., mags))
+    print('Badness at r:', badness(r, mags))
+    print('Badness at r*2:', badness(r*2, mags))
+    print('Badness at mag+1:', badness(r, mags+1.))
+    print('Badness at mag-1:', badness(r, mags-1.))
+
+    i = np.argmax(T.badness)
+    print('Worst badness:', T.badness[i])
+    print('Mag:', T.mask_mag[i])
+    print('Safe radius:', dr9_based_mask_radius(T.mask_mag[i]))
+    print('Radius:', T.dist_arcsec[i])
+
+    # plt.hist(T.badness, range=(0,100), bins=20, log=True)
+    # plt.savefig('badness.png')
+    # sys.exit(0)
+
+    Iworst = np.argsort(-T.badness)
+    badtiles = []
+    btset = set()
+    for tid in T.tileid[Iworst]:
+        if tid in btset:
+            continue
+        badtiles.append(tid)
+        btset.add(tid)
+
+    T.pos_cosd = np.cos(np.deg2rad(T.pos_dec))
+
 
     goodshifts = {}
-
-    for tile in badtiles:
+    for itile,tile in enumerate(badtiles):
         print()
-        print('Tile', tile)
-        I = np.flatnonzero(T.tileid == tile)
-        bad = (T.dist_arcsec[I] < T.mask_radius[I])
-        Ibad = I[bad]
+        tr,td = tilecenter[tile]
+        print('Tile', tile, 'at RA,Dec =', tr, td)
+        Itile = np.flatnonzero(T.tileid == tile)
+        bad = (T.dist_arcsec[Itile] < T.mask_radius[Itile])
+        Ibad = Itile[bad]
         print(len(Ibad), 'bad for tile', tile)
         print('Mags:', T.mask_mag[Ibad])
         print('Mask radii:', T.mask_radius[Ibad])
         print('Dists:', T.dist_arcsec[Ibad])
 
         tr,td = tilecenter[tile]
-        cosd = np.cos(np.deg2rad(td))
-        goodshift = None
+        tile_cosd = np.cos(np.deg2rad(td))
+
+        # Compute shifts in units of 0.001 deg in RA and Dec, up to radius R (in arcsec)
+        R = 15
+        step = 0.001
+        decsteps = int(np.ceil(R / 3600. / step))
+        rasteps  = int(np.ceil(R / 3600. / tile_cosd / step))
+
+        # dra,ddec in DEG, non-isotropic (ie, new_ra = ra + dra)
+        dra,ddec = np.meshgrid(np.arange(-rasteps, rasteps+1), np.arange(-decsteps, decsteps+1))
+        dra  = (dra  * step).ravel()
+        ddec = (ddec * step).ravel()
+
+        # Sort by radius
+        I = np.argsort(np.hypot(dra * tile_cosd, ddec))
+        ## skip 0,0
+        #I = I[1:]
+        dra = dra[I]
+        ddec = ddec[I]
+
+        # trim to R
+        I = (np.hypot(dra * tile_cosd, ddec) <= R/3600.)
+        dra = dra[I]
+        ddec = ddec[I]
+
+        leastbad = 1e12
+        leastbad_max = None
+        best_shift = None
+
+        badnesses = []
+        
         for dr,dd in zip(dra,ddec):
             # Shift the positioners
-            dnew = T.pos_dec[I] + dd/3600.
-            rnew = T.pos_ra[I]  + dr/3600. / cosd
-            newrad = arcsec_between(rnew, dnew, T.star_ra[I], T.star_dec[I])
-            newbad = newrad < T.mask_radius[I]
-            print('Shift (%+ 2i, %+ 2i)' % (dr,dd), ': bad radii',
-                  ', '.join(['%.1f vs %.1f' % (nr,t)
-                             for nr,t in zip(newrad[bad], T.mask_radius[Ibad])]),
-                  ', total of', np.sum(newbad), 'are too close to stars')
-            if not np.any(newbad):
-                print('Found acceptable shift: dr,dd', dr,dd)
-                goodshift = (dr,dd)
-                break
+            dnew = T.pos_dec[Itile] + dd
+            rnew = T.pos_ra[Itile]  + dr
+            newrad = arcsec_between(rnew, dnew, T.star_ra[Itile], T.star_dec[Itile])
+            newbad = badness(newrad, T.mask_mag[Itile])
 
-        if goodshift is None:
-            print('Failed to find a nudge for tile', tile)
+            if dr == 0. and dd == 0.:
+                print('Shift (%.4f, %.4f)' % (dr,dd), ': worst badness', max(newbad),
+                      'total badness', sum(newbad))
 
+            bad = sum(newbad)
+            badnesses.append(bad)
+            if bad < leastbad:
+                leastbad = bad
+                best_shift = (dr,dd)
+                leastbad_max = max(newbad)
+
+                # New best one is also "acceptable"?
+                if max(newbad) < 1.:
+                    break
+
+        dr,dd = best_shift
+        print('Shift (%.4f, %.4f)' % (dr,dd), ': worst badness', leastbad_max,
+              'total badness', leastbad)
+                
+        goodshifts[tile] = (best_shift, leastbad, leastbad_max)
+
+        #if itile < 10:
+        if tile in [22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
             plt.clf()
-            dr = 3600. * (T.star_ra [I] - T.pos_ra [I])*cosd
-            dd = 3600. * (T.star_dec[I] - T.pos_dec[I])
-            rad = T.mask_radius[I]
-            plt.plot(dr, dd, 'k.')
+            dr = 3600. * (T.star_ra [Itile] - T.pos_ra [Itile])*tile_cosd
+            dd = 3600. * (T.star_dec[Itile] - T.pos_dec[Itile])
+            rad = T.mask_radius[Itile]
+            #plt.plot(dr, dd, 'k.')
             from matplotlib.patches import Circle
             for r,d,rr in zip(dr,dd,rad):
-                plt.gca().add_artist(Circle((r,d), rr, color='b', alpha=0.2))
-            plt.plot(dra, ddec, 'k.', alpha=0.1)
+                plt.gca().add_artist(Circle((r,d), rr, color='k', alpha=0.2))
+            #plt.plot(dra*tile_cosd*3600., ddec*3600., 'kx', alpha=0.5)
+    
+            N = len(badnesses)
+            plt.scatter(dra[:N]*tile_cosd*3600., ddec[:N]*3600., c=np.log10(badnesses),
+                        vmin=-1, vmax=2)
+            plt.plot(dra[N:]*tile_cosd*3600., ddec[N:]*3600., 'k.')
+    
+            dr,dd = best_shift
+            plt.plot(dr*tile_cosd*3600., dd*3600., 'o', mec='r', mfc='none', mew=3, ms=10)
+            cb = plt.colorbar()
+            cb.set_label('log10(badness)')
             plt.axis('square')
             plt.axis([-20, 20, -20, 20])
+            plt.axhline(0., color='k', alpha=0.1)
+            plt.axvline(0., color='k', alpha=0.1)
+            plt.title('Tile %i: brightest mag = %.1f, max badness %.1f' % (tile, min(T.mask_mag[Itile]), leastbad_max))
             plt.savefig('tile-%05i.png' % tile)
 
-        goodshifts[tile] = goodshift
 
-    tiles['NEEDS_NUDGE'] = np.zeros(len(tiles), bool)
-    tiles['FOUND_NUDGE'] = np.zeros(len(tiles), bool)
+    tiles['NUDGE_SUM_BADNESS'] = np.zeros(len(tiles), np.float32)
+    tiles['NUDGE_MAX_BADNESS'] = np.zeros(len(tiles), np.float32)
     tiles['NUDGE_RA']  = np.zeros(len(tiles), np.float32)
     tiles['NUDGE_DEC'] = np.zeros(len(tiles), np.float32)
     tiles['NUDGED_RA']  = tiles['RA'].copy()
@@ -311,18 +396,15 @@ if __name__ == '__main__':
         if not tid in goodshifts:
             # this tile does not need a nudge.
             continue
-        tiles['NEEDS_NUDGE'][i] = True
-        nudge = goodshifts[tid]
-        if nudge is None:
-            # no nudge we tried worked!
-            continue
-        tiles['FOUND_NUDGE'][i] = True
-        dr,dd = nudge
+
+        (dr,dd), bad_sum, bad_max = goodshifts[tid]
+
+        tiles['NUDGE_SUM_BADNESS'][i] = bad_sum
+        tiles['NUDGE_MAX_BADNESS'][i] = bad_max
         tiles['NUDGE_RA' ][i] = dr
         tiles['NUDGE_DEC'][i] = dd
-        cosd = np.cos(np.deg2rad(tiles['DEC'][i]))
-        tiles['NUDGED_RA' ][i] += (dr/3600.)/cosd
-        tiles['NUDGED_DEC'][i] += dd/3600.
+        tiles['NUDGED_RA' ][i] += dr
+        tiles['NUDGED_DEC'][i] += dd
 
     tiles.write('tiles-nudged.ecsv', overwrite=True)
     tiles.write('tiles-nudged.fits', overwrite=True)
