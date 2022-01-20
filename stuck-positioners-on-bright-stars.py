@@ -353,8 +353,8 @@ if __name__ == '__main__':
                 
         goodshifts[tile] = (best_shift, leastbad, leastbad_max)
 
-        #if itile < 10:
-        if tile in [22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
+        if itile < 10:
+        #if tile in [22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
             plt.clf()
             dr = 3600. * (T.star_ra [Itile] - T.pos_ra [Itile])*tile_cosd
             dd = 3600. * (T.star_dec[Itile] - T.pos_dec[Itile])
@@ -408,3 +408,15 @@ if __name__ == '__main__':
 
     tiles.write('tiles-nudged.ecsv', overwrite=True)
     tiles.write('tiles-nudged.fits', overwrite=True)
+
+    # Write out updated (drop-in-able) tiles file
+    tiles['RA'][:] = tiles['NUDGED_RA']
+    tiles['DEC'][:] = tiles['NUDGED_DEC']
+    tiles.remove_column('NUDGE_SUM_BADNESS')
+    tiles.remove_column('NUDGE_MAX_BADNESS')
+    tiles.remove_column('NUDGE_RA')
+    tiles.remove_column('NUDGE_DEC')
+    tiles.remove_column('NUDGED_RA')
+    tiles.remove_column('NUDGED_DEC')
+    tiles.write('tiles-nudged-new.ecsv', overwrite=True)
+    tiles.write('tiles-nudged-new.fits', overwrite=True)
