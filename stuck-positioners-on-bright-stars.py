@@ -1,3 +1,7 @@
+'''
+This is the script used to nudge DESI tile centers so that bright stars do not land on stuck
+fiber positioners.
+'''
 import pylab as plt
 import os
 import numpy as np
@@ -32,6 +36,10 @@ stuck_y = None
 stuck_loc = None
 starkd = None
 
+#tiles_filename = '/global/cfs/cdirs/desi/survey/ops/surveyops/trunk/ops/tiles-main.ecsv'
+# DESI-ext
+tiles_filename = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-geometry-superset-new.ecsv'
+
 def _match_tile(X):
     tid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X
 
@@ -47,7 +55,7 @@ def _match_tile(X):
         res = None
     return res
 
-def main():
+def find_stuck_on_stars():
     os.environ['DESIMODEL'] = '/global/homes/d/dstn/desimodel-data'
 
     global hw
@@ -90,7 +98,7 @@ def main():
         stuck_x[iloc] = loc_x
         stuck_y[iloc] = loc_y
     
-    tiles = Table.read('/global/cfs/cdirs/desi/target/surveyops/ops/tiles-main.ecsv')
+    tiles = Table.read(tiles_filename)
     print(len(tiles), 'tiles')
     # Deduplicate tiles with same RA,Dec center
     tilera = tiles['RA']
@@ -133,11 +141,13 @@ def main():
     
     allresults = {}
     
-    mp = multiproc(32)
+    mp = multiproc(128)
 
     print('Building arg lists...')
     args = []
-    for tid,tile_ra,tile_dec,tile_obsha in zip(tileid, tilera, tiledec, tiles['DESIGNHA']):
+    #design_ha = tiles['DESGNHA']
+    design_ha = np.zeros(len(tiles))
+    for tid,tile_ra,tile_dec,tile_obsha in zip(tileid, tilera, tiledec, design_ha):
         # skip duplicate tiles
         if tid in tilemap:
             continue
@@ -196,11 +206,9 @@ def arcsec_between(ra1,dec1, ra2,dec2):
     rad = np.arccos(1. - d2 / 2.)
     return 3600.*np.rad2deg(rad)
 
-
-if __name__ == '__main__':
-    #main()
-
-    tiles = Table.read('/global/cfs/cdirs/desi/target/surveyops/ops/tiles-main.ecsv')
+def nudge_tile_centers():
+    # Below here uses stuck-on-stars.fits to nudge the tile centers
+    tiles = Table.read(tiles_filename)
     tilera = tiles['RA']
     tiledec = tiles['DEC']
     tileid = tiles['TILEID']
@@ -353,8 +361,8 @@ if __name__ == '__main__':
                 
         goodshifts[tile] = (best_shift, leastbad, leastbad_max)
 
-        if itile < 10:
-        #if tile in [22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
+        #if itile < 10:
+        if tile in [3827]: #22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
             plt.clf()
             dr = 3600. * (T.star_ra [Itile] - T.pos_ra [Itile])*tile_cosd
             dd = 3600. * (T.star_dec[Itile] - T.pos_dec[Itile])
@@ -364,7 +372,7 @@ if __name__ == '__main__':
             for r,d,rr in zip(dr,dd,rad):
                 plt.gca().add_artist(Circle((r,d), rr, color='k', alpha=0.2))
             #plt.plot(dra*tile_cosd*3600., ddec*3600., 'kx', alpha=0.5)
-    
+
             N = len(badnesses)
             plt.scatter(dra[:N]*tile_cosd*3600., ddec[:N]*3600., c=np.log10(badnesses),
                         vmin=-1, vmax=2)
@@ -380,7 +388,7 @@ if __name__ == '__main__':
             plt.axvline(0., color='k', alpha=0.1)
             plt.title('Tile %i: brightest mag = %.1f, max badness %.1f' % (tile, min(T.mask_mag[Itile]), leastbad_max))
             plt.savefig('tile-%05i.png' % tile)
-
+            #sys.exit(0)
 
     tiles['NUDGE_SUM_BADNESS'] = np.zeros(len(tiles), np.float32)
     tiles['NUDGE_MAX_BADNESS'] = np.zeros(len(tiles), np.float32)
@@ -420,3 +428,12 @@ if __name__ == '__main__':
     tiles.remove_column('NUDGED_DEC')
     tiles.write('tiles-nudged-new.ecsv', overwrite=True)
     tiles.write('tiles-nudged-new.fits', overwrite=True)
+
+if __name__ == '__main__':
+    #tiles = Table.read(tiles_filename)
+    #tiles.write('tiles-orig.fits', overwrite=True)
+    #sys.exit(0)
+    # This writes the stuck-on-stars.fits file
+    find_stuck_on_stars()
+    # This nudges the tile centers (using stuck-on-stars.fits)
+    nudge_tile_centers()
