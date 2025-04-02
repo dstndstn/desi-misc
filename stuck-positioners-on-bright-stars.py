@@ -41,16 +41,16 @@ starkd = None
 tiles_filename = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-geometry-superset-new.ecsv'
 
 def _match_tile(X):
-    tid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X
+    k, uid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X
 
     loc_ra,loc_dec = xy2radec(
         hw, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha,
         stuck_x, stuck_y, False, 0)
     kd = tree_build_radec(loc_ra, loc_dec)
     I,J,d = trees_match(starkd, kd, match_radius)
-    print('Tile', tid, 'matched', len(I), 'stars')
+    print(k, 'Tile', uid, 'matched', len(I), 'stars')
     if len(I):
-        res = tid, I, loc_ra[J], loc_dec[J], stuck_loc[J], np.rad2deg(d)*3600.
+        res = uid, I, loc_ra[J], loc_dec[J], stuck_loc[J], np.rad2deg(d)*3600.
     else:
         res = None
     return res
@@ -103,28 +103,28 @@ def find_stuck_on_stars():
     # Deduplicate tiles with same RA,Dec center
     tilera = tiles['RA']
     tiledec = tiles['DEC']
-    tileid = tiles['TILEID']
+
+    tile_uid = tiles_get_unique_id(tiles)
+
     rdtile = {}
     tilemap = {}
-    for tid,r,d in zip(tileid, tilera, tiledec):
+    for uid,r,d in zip(tile_uid, tilera, tiledec):
         key = r,d
         if key in rdtile:
             # already seen a tile with this RA,Dec; point to it
-            tilemap[tid] = rdtile[key]
+            tilemap[uid] = rdtile[key]
         else:
-            rdtile[key] = tid
+            rdtile[key] = uid
     del rdtile
 
-    tnow = datetime.now()
-    tile_obstime = tnow.isoformat(timespec='seconds')
-    mjd = Time(tnow).mjd
+    t_mid = datetime(2027, 1, 1)
+    tile_obstime = t_mid.isoformat(timespec='seconds')
+    mjd = Time(t_mid).mjd
+    print('Moving stars to MJD', mjd)
 
-
-    
-    stars = fits_table('/global/cfs/cdirs/cosmo/data/legacysurvey/dr9/masking/gaia-mask-dr9.fits.gz')
+    stars = fits_table('/global/cfs/cdirs/desi/users/ioannis/SGA/2025/gaia/gaia-mask-dr3-allsky.fits')
     print(len(stars), 'stars for masking')
 
-    print('Moving to MJD', mjd)
     ra,dec = radec_at_mjd(stars.ra, stars.dec, stars.ref_epoch.astype(float),
                           stars.pmra, stars.pmdec, stars.parallax, mjd)
     assert(np.all(np.isfinite(ra)))
@@ -132,7 +132,6 @@ def find_stuck_on_stars():
     stars.ra = ra
     stars.dec = dec
     print('Building kd-tree...')
-
     starkd = tree_build_radec(stars.ra, stars.dec)
 
     match_radius = deg2dist(30./3600.)
@@ -146,21 +145,24 @@ def find_stuck_on_stars():
     print('Building arg lists...')
     args = []
     #design_ha = tiles['DESGNHA']
+    # Eddie told me to do this :)
     design_ha = np.zeros(len(tiles))
-    for tid,tile_ra,tile_dec,tile_obsha in zip(tileid, tilera, tiledec, design_ha):
+    k = 0
+    for uid,tile_ra,tile_dec,tile_obsha in zip(tile_uid, tilera, tiledec, design_ha):
         # skip duplicate tiles
-        if tid in tilemap:
+        if uid in tilemap:
             continue
         # "fieldrot"
         tile_theta = field_rotation_angle(tile_ra, tile_dec, mjd)
-        args.append((tid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius))
+        args.append((k, uid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius))
+        k += 1
 
     print('Matching', len(args), 'unique tile RA,Decs in parallel...')
     res = mp.map(_match_tile, args)
 
     print('Organizing results...')
     T = fits_table()
-    T.tileid = []
+    T.tile_uniqueid = []
     T.loc = []
     T.petal = []
     T.device = []
@@ -179,8 +181,8 @@ def find_stuck_on_stars():
     for vals in res:
         if vals is None:
             continue
-        tileid, I, pos_ra, pos_dec, pos_loc, dists = vals
-        T.tileid.extend([tileid] * len(I))
+        uid, I, pos_ra, pos_dec, pos_loc, dists = vals
+        T.tile_uniqueid.extend([uid] * len(I))
         T.loc.extend(pos_loc)
         for loc in pos_loc:
             T.petal.append(loc_to_petal[loc])
@@ -206,39 +208,49 @@ def arcsec_between(ra1,dec1, ra2,dec2):
     rad = np.arccos(1. - d2 / 2.)
     return 3600.*np.rad2deg(rad)
 
+def tiles_get_unique_id(tiles):
+    # in the DESI-ext file, many tileids are -1.  RA,DEC values are duplicated for programs.
+    tilera = tiles['RA']
+    tiledec = tiles['DEC']
+    tileprog = tiles['PROGRAM']
+    tile_uid = np.array(['%s_%.3f_%.3f' % (p, r, d) for p,r,d in zip(tileprog, tilera, tiledec)])
+    return tile_uid
+        
 def nudge_tile_centers():
-    # Below here uses stuck-on-stars.fits to nudge the tile centers
+    # Uses stuck-on-stars.fits to nudge the tile centers
     tiles = Table.read(tiles_filename)
     tilera = tiles['RA']
     tiledec = tiles['DEC']
-    tileid = tiles['TILEID']
+
+    tile_uid = tiles_get_unique_id(tiles)
+
     rd = list(zip(tilera, tiledec))
     print(len(tiles), 'tiles')
     print(len(set(rd)), 'unique RA,Dec centers')
+    print(len(set(tile_uid)), 'unique tile_uids in tiles file')
 
     tilecenter = {}
     rdtile = {}
     tilemap = {}
-    for tid,r,d in zip(tileid, tilera, tiledec):
-        tilecenter[tid] = (r,d)
+    for uid,r,d in zip(tile_uid, tilera, tiledec):
+        tilecenter[uid] = (r,d)
         key = r,d
         if key in rdtile:
             # already seen a tile with this RA,Dec; point to it
-            tilemap[tid] = rdtile[key]
+            tilemap[uid] = rdtile[key]
         else:
-            rdtile[key] = tid
+            rdtile[key] = uid
     del rdtile
 
     T = fits_table('stuck-on-stars.fits')
-    print(len(T), 'matches')
-    print(len(set(T.tileid)), 'tiles')
+    print(len(set(T.tile_uniqueid)), 'unique tile_uniqueids in stuck-on-stars file')
+    print(len(T), 'stuck-on-stars matches')
 
-    duptile = np.isin(T.tileid, list(tilemap.keys()))
-    #print(np.sum(duptile), 'duplicate tiles')
+    duptile = np.isin(T.tile_uniqueid, list(tilemap.keys()))
+    print(np.sum(duptile), 'duplicate tiles')
     T.cut(np.logical_not(duptile))
     print(len(T), 'matches on non-dup tiles')
-    print(len(set(T.tileid)), 'tiles')
-
+    print(len(set(T.tile_uniqueid)), 'tiles')
 
     def dr9_based_mask_radius(mag):
         ''' in arcsec '''
@@ -254,7 +266,6 @@ def nudge_tile_centers():
 
     T.mask_radius = dr9_based_mask_radius(T.mask_mag)
     T.badness = badness(np.maximum(0.5, T.dist_arcsec), T.mask_mag)
-
 
     mags = np.array([0., 10., 11., 12., 16.])
     print('Mags:', mags)
@@ -279,29 +290,28 @@ def nudge_tile_centers():
     Iworst = np.argsort(-T.badness)
     badtiles = []
     btset = set()
-    for tid in T.tileid[Iworst]:
-        if tid in btset:
+    for uid in T.tile_uniqueid[Iworst]:
+        if uid in btset:
             continue
-        badtiles.append(tid)
-        btset.add(tid)
+        badtiles.append(uid)
+        btset.add(uid)
 
     T.pos_cosd = np.cos(np.deg2rad(T.pos_dec))
 
-
     goodshifts = {}
-    for itile,tile in enumerate(badtiles):
+    for itile,uid in enumerate(badtiles):
         print()
-        tr,td = tilecenter[tile]
-        print('Tile', tile, 'at RA,Dec =', tr, td)
-        Itile = np.flatnonzero(T.tileid == tile)
+        tr,td = tilecenter[uid]
+        print('Tile uid', uid, 'at RA,Dec =', tr, td)
+        Itile = np.flatnonzero(T.tile_uniqueid == uid)
         bad = (T.dist_arcsec[Itile] < T.mask_radius[Itile])
         Ibad = Itile[bad]
-        print(len(Ibad), 'bad for tile', tile)
+        print(len(Ibad), 'bad for tile', uid)
         print('Mags:', T.mask_mag[Ibad])
         print('Mask radii:', T.mask_radius[Ibad])
         print('Dists:', T.dist_arcsec[Ibad])
 
-        tr,td = tilecenter[tile]
+        tr,td = tilecenter[uid]
         tile_cosd = np.cos(np.deg2rad(td))
 
         # Compute shifts in units of 0.001 deg in RA and Dec, up to radius R (in arcsec)
@@ -359,10 +369,11 @@ def nudge_tile_centers():
         print('Shift (%.4f, %.4f)' % (dr,dd), ': worst badness', leastbad_max,
               'total badness', leastbad)
                 
-        goodshifts[tile] = (best_shift, leastbad, leastbad_max)
+        goodshifts[uid] = (best_shift, leastbad, leastbad_max)
 
         #if itile < 10:
-        if tile in [3827]: #22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
+        #if tile in [3827]: #22427,  3427, 11815,  2647, 21647, 10191, 26112,  7112, 42039, 1848]:
+        if uid in []:
             plt.clf()
             dr = 3600. * (T.star_ra [Itile] - T.pos_ra [Itile])*tile_cosd
             dd = 3600. * (T.star_dec[Itile] - T.pos_dec[Itile])
@@ -386,8 +397,8 @@ def nudge_tile_centers():
             plt.axis([-20, 20, -20, 20])
             plt.axhline(0., color='k', alpha=0.1)
             plt.axvline(0., color='k', alpha=0.1)
-            plt.title('Tile %i: brightest mag = %.1f, max badness %.1f' % (tile, min(T.mask_mag[Itile]), leastbad_max))
-            plt.savefig('tile-%05i.png' % tile)
+            plt.title('Tile %s: brightest mag = %.1f, max badness %.1f' % (uid, min(T.mask_mag[Itile]), leastbad_max))
+            plt.savefig('tile-%05i.png' % uid)
             #sys.exit(0)
 
     tiles['NUDGE_SUM_BADNESS'] = np.zeros(len(tiles), np.float32)
@@ -397,15 +408,15 @@ def nudge_tile_centers():
     tiles['NUDGED_RA']  = tiles['RA'].copy()
     tiles['NUDGED_DEC'] = tiles['DEC'].copy()
 
-    for i,(tid) in enumerate(tileid):
+    for i,(uid) in enumerate(tile_id):
         # map to canonical tile with this tile's RA,Dec
-        tid = tilemap.get(tid, tid)
+        uid = tilemap.get(uid, uid)
 
-        if not tid in goodshifts:
+        if not uid in goodshifts:
             # this tile does not need a nudge.
             continue
 
-        (dr,dd), bad_sum, bad_max = goodshifts[tid]
+        (dr,dd), bad_sum, bad_max = goodshifts[uid]
 
         tiles['NUDGE_SUM_BADNESS'][i] = bad_sum
         tiles['NUDGE_MAX_BADNESS'][i] = bad_max
@@ -433,6 +444,7 @@ if __name__ == '__main__':
     #tiles = Table.read(tiles_filename)
     #tiles.write('tiles-orig.fits', overwrite=True)
     #sys.exit(0)
+
     # This writes the stuck-on-stars.fits file
     find_stuck_on_stars()
     # This nudges the tile centers (using stuck-on-stars.fits)

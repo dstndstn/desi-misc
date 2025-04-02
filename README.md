@@ -9,6 +9,7 @@ Nudge tile centers to avoid bright stars landing on stuck fiber positioners.
 Running `stuck-positioners-on-bright-stars.py`:
 
 # On a Perlmutter interactive node:
+(this timed out... instead have to `sbatch stuck.sh`)
 
 module unload tractor
 unset PYTHONPATH
