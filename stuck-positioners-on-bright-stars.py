@@ -408,7 +408,7 @@ def nudge_tile_centers():
     tiles['NUDGED_RA']  = tiles['RA'].copy()
     tiles['NUDGED_DEC'] = tiles['DEC'].copy()
 
-    for i,(uid) in enumerate(tile_id):
+    for i,(uid) in enumerate(tile_uid):
         # map to canonical tile with this tile's RA,Dec
         uid = tilemap.get(uid, uid)
 
