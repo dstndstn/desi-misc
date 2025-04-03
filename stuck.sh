@@ -1,6 +1,7 @@
 #! /bin/bash
 
 #SBATCH -t 24:00:00
+#SBATCH -q regular
 #SBATCH -C cpu
 #SBATCH --nodes 1
 
