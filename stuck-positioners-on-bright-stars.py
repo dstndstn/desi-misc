@@ -432,7 +432,7 @@ def nudge_tile_centers():
         tiles['NUDGED_RA' ][i] += dr
         tiles['NUDGED_DEC'][i] += dd
 
-    tiles.write('tiles-nudged.ecsv', overwrite=True)
+    tiles.write('tiles-nudged.ecsv', overwrite=True, delimiter=',')
     tiles.write('tiles-nudged.fits', overwrite=True)
 
     # Write out updated (drop-in-able) tiles file
@@ -445,7 +445,7 @@ def nudge_tile_centers():
     tiles.remove_column('NUDGE_DEC')
     tiles.remove_column('NUDGED_RA')
     tiles.remove_column('NUDGED_DEC')
-    tiles.write('tiles-nudged-new.ecsv', overwrite=True)
+    tiles.write('tiles-nudged-new.ecsv', overwrite=True, delimiter=',')
     tiles.write('tiles-nudged-new.fits', overwrite=True)
 
 if __name__ == '__main__':
@@ -455,8 +455,8 @@ if __name__ == '__main__':
     # tilera[:] = np.round(tilera, decimals=3)
     # tiledec[:] = np.round(tiledec, decimals=3)
     # #tiles.write('tiles-orig.fits', overwrite=True)
-    # tiles.write('tiles-orig.ecsv', overwrite=True)
-    # #formats={'RA': '%.3f', 'DEC': '%.3f'})
+    # tiles.write('tiles-orig.ecsv', overwrite=True, delimiter=',')
+    # # #formats={'RA': '%.3f', 'DEC': '%.3f'})
     # sys.exit(0)
 
     # This writes the stuck-on-stars.fits file
