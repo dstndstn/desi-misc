@@ -40,7 +40,7 @@ starkd = None
 # DESI-ext
 #tiles_filename = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-geometry-superset-new.ecsv'
 # DESI-ext bright
-tiles_filename = 'gd1_orphan_pal5_dwarfs_extension_tiles_v0.4.csv'
+tiles_filename = 'gd1_orphan_pal5_dwarfs_extension_tiles_v0.5.csv'
 
 def _match_tile(X):
     k, uid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X
@@ -107,7 +107,7 @@ def find_stuck_on_stars():
     tiledec = tiles['DEC']
 
     # Round RA,Dec to 3 decimal places.
-    tilera[:] = np.round(tilera, decimals=3)
+    tilera [:] = np.round(tilera,  decimals=3)
     tiledec[:] = np.round(tiledec, decimals=3)
 
     # Deduplicate tiles with same RA,Dec center
@@ -445,23 +445,19 @@ def nudge_tile_centers():
     tiles.remove_column('NUDGE_DEC')
     tiles.remove_column('NUDGED_RA')
     tiles.remove_column('NUDGED_DEC')
-
-    tilera[:] = np.round(tilera, decimals=3)
-    tiledec[:] = np.round(tiledec, decimals=3)
-
     tiles.write('tiles-nudged-new.ecsv', overwrite=True)
     tiles.write('tiles-nudged-new.fits', overwrite=True)
 
 if __name__ == '__main__':
-    tiles = Table.read(tiles_filename)
-    tilera = tiles['RA']
-    tiledec = tiles['DEC']
-    tilera[:] = np.round(tilera, decimals=3)
-    tiledec[:] = np.round(tiledec, decimals=3)
-    #tiles.write('tiles-orig.fits', overwrite=True)
-    tiles.write('tiles-orig.ecsv', overwrite=True)
-    #formats={'RA': '%.3f', 'DEC': '%.3f'})
-    sys.exit(0)
+    # tiles = Table.read(tiles_filename)
+    # tilera = tiles['RA']
+    # tiledec = tiles['DEC']
+    # tilera[:] = np.round(tilera, decimals=3)
+    # tiledec[:] = np.round(tiledec, decimals=3)
+    # #tiles.write('tiles-orig.fits', overwrite=True)
+    # tiles.write('tiles-orig.ecsv', overwrite=True)
+    # #formats={'RA': '%.3f', 'DEC': '%.3f'})
+    # sys.exit(0)
 
     # This writes the stuck-on-stars.fits file
     find_stuck_on_stars()
