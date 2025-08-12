@@ -40,7 +40,9 @@ starkd = None
 # DESI-ext
 #tiles_filename = '/global/cfs/cdirs/desi/users/djschleg/tiling/tiles-geometry-superset-new.ecsv'
 # DESI-ext bright
-tiles_filename = 'gd1_orphan_pal5_dwarfs_extension_tiles_v0.5.csv'
+#tiles_filename = 'gd1_orphan_pal5_dwarfs_extension_tiles_v0.5.csv'
+# DESI-1b bright M31
+tiles_filename = '/pscratch/sd/d/dstn/surveyops/ops/tiles-m31-1b.ecsv'
 
 def _match_tile(X):
     k, uid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X
@@ -112,8 +114,11 @@ def find_stuck_on_stars():
 
     # Deduplicate tiles with same RA,Dec center
     tile_uid = tiles_get_unique_id(tiles)
+    print('Tile unique ids (first 10):', tile_uid[:10])
 
+    # rdtile[(ra,dec)] -> uid
     rdtile = {}
+    # tilemap[uid] -> uid of the canonical tile for this tile's ra,dec
     tilemap = {}
     for uid,r,d in zip(tile_uid, tilera, tiledec):
         key = r,d
@@ -122,6 +127,11 @@ def find_stuck_on_stars():
             tilemap[uid] = rdtile[key]
         else:
             rdtile[key] = uid
+    print(len(rdtile), 'unique RA,Dec values for tiles')
+
+    print('Sample of rdtile:', list(rdtile.items())[:10])
+    print('Sample of tilemap:', list(tilemap.items())[:10])
+
     del rdtile
 
     t_mid = datetime(2027, 1, 1)
@@ -217,12 +227,14 @@ def arcsec_between(ra1,dec1, ra2,dec2):
 
 def tiles_get_unique_id(tiles):
     # in the DESI-ext file, many tileids are -1.  RA,DEC values are duplicated for programs.
-    tilera = tiles['RA']
-    tiledec = tiles['DEC']
-    tileprog = tiles['PROGRAM']
-    tile_uid = np.array(['%s_%.3f_%.3f' % (p, r, d) for p,r,d in zip(tileprog, tilera, tiledec)])
+    # tilera = tiles['RA']
+    # tiledec = tiles['DEC']
+    # tileprog = tiles['PROGRAM']
+    # tile_uid = np.array(['%s_%.3f_%.3f' % (p, r, d) for p,r,d in zip(tileprog, tilera, tiledec)])
+
+    tile_uid = tiles['TILEID']
     return tile_uid
-        
+
 def nudge_tile_centers():
     # Uses stuck-on-stars.fits to nudge the tile centers
     tiles = Table.read(tiles_filename)
