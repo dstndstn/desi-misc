@@ -42,7 +42,10 @@ starkd = None
 # DESI-ext bright
 #tiles_filename = 'gd1_orphan_pal5_dwarfs_extension_tiles_v0.5.csv'
 # DESI-1b bright M31
-tiles_filename = '/pscratch/sd/d/dstn/surveyops/ops/tiles-m31-1b.ecsv'
+#tiles_filename = '/pscratch/sd/d/dstn/surveyops/ops/tiles-m31-1b.ecsv'
+# DESI-1b bright C19 stream
+tiles_filename = 'C19_24phi138_extension_tiles_v1.csv'
+
 
 def _match_tile(X):
     k, uid, tile_ra, tile_dec, tile_obstime, tile_theta, tile_obsha, match_radius = X

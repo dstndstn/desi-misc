@@ -1,8 +1,23 @@
 # desi-misc
 Miscellaneous tasks for DESI
 
-
 Nudge tile centers to avoid bright stars landing on stuck fiber positioners.
+
+## 2025-09-26
+
+Running `stuck-positioners-on-bright-stars.py`:
+
+# On a Perlmutter interactive node: as below,
+
+module unload tractor
+unset PYTHONPATH
+source /global/common/software/desi/desi_environment.sh 24.4
+module use /global/common/software/desi/users/dstn/modulefiles/
+module load tractor/desi24.4
+export PYTHONPATH=${PYTHONPATH}:~/legacypipe/py
+(cd ~/legacypipe && git describe)  #  --> DR10.3.6-62-gb7ff37ae
+(cd ~/desimodel-data && svn up)    #  --> At revision 144778.
+python -u stuck-positioners-on-bright-stars.py > log 2>&1 &
 
 ## 2025-04-01
 
