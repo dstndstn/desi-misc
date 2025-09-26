@@ -17,7 +17,7 @@ module load tractor/desi24.4
 export PYTHONPATH=${PYTHONPATH}:~/legacypipe/py
 (cd ~/legacypipe && git describe)  #  --> DR10.3.6-62-gb7ff37ae
 (cd ~/desimodel-data && svn up)    #  --> At revision 144778.
-python -u stuck-positioners-on-bright-stars.py > log 2>&1 &
+python -u stuck-positioners-on-bright-stars.py > stuck-C19.log 2>&1 &
 
 ## 2025-04-01
 
